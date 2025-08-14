@@ -317,6 +317,7 @@ export const ChatArea: React.FC = () => {
   const [isQuizModalOpen, setIsQuizModalOpen] = useState(false);
   const [isQuizDisplayOpen, setIsQuizDisplayOpen] = useState(false);
   const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
+  const [selectedMessageChatId, setSelectedMessageChatId] = useState<string | null>(null);
 
   // Research TTS Modal state
   const [isResearchTTSModalOpen, setIsResearchTTSModalOpen] = useState(false);
@@ -1125,20 +1126,23 @@ export const ChatArea: React.FC = () => {
     }
   };
 
-  const handleOpenQuizModal = () => {
+  const handleOpenQuizModal = (messageChatId?: string) => {
     if (!state.currentChat?.messages.length) {
       setNotification("No conversation found to generate quiz from");
       setTimeout(() => setNotification(null), 3000);
       return;
     }
 
-    // Check if we have a backend chat ID
-    if (!state.currentChat?.backendChatId) {
+    // Use the specific message's chat_id if provided, otherwise fall back to the general chat's backendChatId
+    const chatIdToUse = messageChatId || state.currentChat?.backendChatId;
+    
+    if (!chatIdToUse) {
       setNotification("Please send a message first to start a conversation");
       setTimeout(() => setNotification(null), 3000);
       return;
     }
 
+    setSelectedMessageChatId(chatIdToUse);
     setIsQuizModalOpen(true);
   };
 
@@ -1146,8 +1150,18 @@ export const ChatArea: React.FC = () => {
     difficulty: string,
     numQuestions: number
   ) => {
-    if (!state.currentChat?.backendChatId) {
+    const chatIdToUse = selectedMessageChatId || state.currentChat?.backendChatId;
+    
+    if (!chatIdToUse) {
       setNotification("No chat ID found. Please send a message first.");
+      setTimeout(() => setNotification(null), 3000);
+      return;
+    }
+
+    // Validate chat_id format (should be a string, not an object)
+    if (typeof chatIdToUse !== 'string') {
+      console.error('Invalid chat_id format:', chatIdToUse);
+      setNotification("Invalid chat ID format. Please try again.");
       setTimeout(() => setNotification(null), 3000);
       return;
     }
@@ -1160,7 +1174,7 @@ export const ChatArea: React.FC = () => {
         user_id: state.currentUser.username,
         num_questions: numQuestions,
         difficulty: difficulty,
-        chat_id: state?.currentChat?.backendChatId,
+        chat_id: chatIdToUse,
       };
 
       console.log("Sending quiz request:", requestBody);
@@ -1174,7 +1188,9 @@ export const ChatArea: React.FC = () => {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        console.error(`Quiz generation failed (${response.status}):`, errorText);
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
       }
 
       const data = await response.json();
@@ -1655,7 +1671,7 @@ export const ChatArea: React.FC = () => {
 
                               {/* Generate Quiz Button */}
                               <button
-                                onClick={handleOpenQuizModal}
+                                onClick={() => handleOpenQuizModal(message.chat_id)}
                                 disabled={isGeneratingQuiz}
                                 className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 ${
                                   isGeneratingQuiz

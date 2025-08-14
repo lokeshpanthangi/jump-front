@@ -81,6 +81,7 @@ type ChatAction =
       messageId: string | null;
     }
   | { type: "SET_BACKEND_CHAT_ID"; chatId: string; backendChatId: string }
+  | { type: "SET_MESSAGE_CHAT_ID"; chatId: string; messageId: string; messageChatId: string }
   | { type: "SET_RESEARCH_MODE_USED"; chatId: string }
   | { type: "SET_THEME"; theme: Theme }
   | { type: "TOGGLE_SIDEBAR" }
@@ -305,6 +306,39 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       };
     }
 
+    case "SET_MESSAGE_CHAT_ID": {
+      const updatedChats = state.chats.map((chat) => {
+        if (chat.id === action.chatId) {
+          const updatedMessages = chat.messages.map((message) => {
+            if (message.id === action.messageId) {
+              return {
+                ...message,
+                chat_id: action.messageChatId,
+              };
+            }
+            return message;
+          });
+
+          return {
+            ...chat,
+            messages: updatedMessages,
+          };
+        }
+        return chat;
+      });
+
+      const currentChat =
+        state.currentChatId === action.chatId
+          ? updatedChats.find((c) => c.id === action.chatId) || null
+          : state.currentChat;
+
+      return {
+        ...state,
+        chats: updatedChats,
+        currentChat,
+      };
+    }
+
     case "SET_RESEARCH_MODE_USED": {
       const updatedChats = state.chats.map((chat) => {
         if (chat.id === action.chatId) {
@@ -452,6 +486,7 @@ type ChatContextType = {
   ) => void;
   setCurrentlyGenerating: (chatId: string, messageId: string | null) => void;
   setBackendChatId: (chatId: string, backendChatId: string) => void;
+  setMessageChatId: (chatId: string, messageId: string, messageChatId: string) => void;
   setResearchModeUsed: (chatId: string) => void;
   setTheme: (theme: Theme) => void;
   toggleSidebar: () => void;
@@ -569,7 +604,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 type: "user",
                 timestamp: new Date(chatData.timestamp),
                 page: pageData.page,
-                chat_id: pageData.chat_id,
+                chat_id: typeof pageData.chat_id === 'object' && pageData.chat_id?._id ? pageData.chat_id._id : pageData.chat_id,
               });
             }
 
@@ -610,7 +645,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 timestamp: new Date(chatData.timestamp),
                 mode: chatData.LLM_model === "gemini" ? "research" : "web",
                 page: pageData.page,
-                chat_id: pageData.chat_id,
+                chat_id: typeof pageData.chat_id === 'object' && pageData.chat_id?._id ? pageData.chat_id._id : pageData.chat_id,
               });
             }
           });
@@ -632,7 +667,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               pageMessages.length > 0
                 ? pageMessages[pageMessages.length - 1].timestamp
                 : new Date(),
-            backendChatId: pageData.chats.find((v) => v.chat_id), // Page-level chat doesn't have individual chat_id
+            backendChatId: (() => {
+              const chatWithId = pageData.chats.find((v) => v.chat_id);
+              if (chatWithId && chatWithId.chat_id) {
+                return typeof chatWithId.chat_id === 'object' && chatWithId.chat_id._id 
+                  ? chatWithId.chat_id._id 
+                  : chatWithId.chat_id;
+              }
+              return undefined;
+            })(), // Extract the actual chat_id string
             hasUsedResearchMode: pageData.chats.some(
               (chat: any) => chat.LLM_model === "gemini"
             ),
@@ -809,6 +852,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     type: "SET_BACKEND_CHAT_ID",
                     chatId,
                     backendChatId,
+                  });
+                  // Set the chat_id on the individual message
+                  dispatch({
+                    type: "SET_MESSAGE_CHAT_ID",
+                    chatId,
+                    messageId: aiMessageId,
+                    messageChatId: backendChatId,
                   });
                 }
                 break;
@@ -1286,6 +1336,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: "SET_BACKEND_CHAT_ID", chatId, backendChatId });
   };
 
+  const setMessageChatId = (chatId: string, messageId: string, messageChatId: string) => {
+    dispatch({ type: "SET_MESSAGE_CHAT_ID", chatId, messageId, messageChatId });
+  };
+
   const setResearchModeUsed = (chatId: string) => {
     dispatch({ type: "SET_RESEARCH_MODE_USED", chatId });
   };
@@ -1309,6 +1363,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setMessageStreaming,
     setCurrentlyGenerating,
     setBackendChatId,
+    setMessageChatId,
     setResearchModeUsed,
     setTheme,
     toggleSidebar,
