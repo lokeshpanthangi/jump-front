@@ -531,6 +531,26 @@ export const ChatArea: React.FC = () => {
       // Mark as processed
       lastProcessedMessageRef.current = messageId;
 
+      // First, add the message to chat immediately to show animation
+      const placeholderMessage = {
+        id: messageId,
+        content: content,
+        type: "ai" as const,
+        timestamp: new Date(),
+        isStreaming: false,
+        isCurrentlyGenerating: false,
+        page: state.currentPage,
+        hasAutoTTSPlayed: false,
+        isAutoTTSMessage: true,
+      };
+      
+      if (state.currentChatId) {
+        dispatch({ type: "ADD_MESSAGE", chatId: state.currentChatId, message: placeholderMessage });
+      }
+      
+      // Clear the pending response
+      dispatch({ type: "HANDLE_AUTO_TTS_RESPONSE", chatId: "", content: "", messageId: "" });
+
       // Trigger synchronized TTS with word-by-word display
       handleSynchronizedTTS(content, messageId);
     }
@@ -752,26 +772,7 @@ export const ChatArea: React.FC = () => {
       // Create audio element
       const audio = new Audio(audioUrl);
       
-      // Now that TTS is ready, add the message to the chat
-      const apiMessage = {
-        id: messageId,
-        content: content,
-        type: "ai" as const,
-        timestamp: new Date(),
-        isStreaming: false,
-        isCurrentlyGenerating: false,
-        page: state.currentPage,
-        hasAutoTTSPlayed: true, // Mark as played since we're about to play it
-        isAutoTTSMessage: true, // Mark as Auto TTS message
-      };
-      
-      // Add the message to the chat
-      if (state.currentChatId) {
-        dispatch({ type: "ADD_MESSAGE", chatId: state.currentChatId, message: apiMessage });
-      }
-      
-      // Clear the pending response
-      dispatch({ type: "HANDLE_AUTO_TTS_RESPONSE", chatId: "", content: "", messageId: "" });
+      // Message already added to chat in useEffect, just proceed with TTS setup
 
       // Setup synchronized TTS data
       setSynchronizedTTSData({
@@ -821,13 +822,21 @@ export const ChatArea: React.FC = () => {
         URL.revokeObjectURL(audioUrl);
       };
 
-      // When audio starts playing, clear generating state and start synchronized display
+      // When audio starts playing, clear generating state and mark message as played
       audio.onplay = () => {
         setGeneratingAutoTTS(prev => {
           const newSet = new Set(prev);
           newSet.delete(messageId);
           return newSet;
         });
+        // Mark the message as played when audio starts
+        if (state.currentChatId) {
+          dispatch({ 
+            type: "MARK_MESSAGE_AUTO_TTS_PLAYED", 
+            chatId: state.currentChatId, 
+            messageId: messageId 
+          });
+        }
       };
 
       // Start audio playback
@@ -1415,9 +1424,9 @@ export const ChatArea: React.FC = () => {
                         ) : state.autoTTS && generatingAutoTTS.has(message.id) ? (
                           // Show thinking animation when auto TTS is generating audio
                           <TypingAnimation className="text-base" />
-                        ) : message.isAutoTTSMessage && !message.hasAutoTTSPlayed && !synchronizedTTSData ? (
-                          // Hide AI response initially when Auto TTS is enabled and not yet played
-                          <div className="text-text-muted italic">Preparing audio response...</div>
+                        ) : message.isAutoTTSMessage && !message.hasAutoTTSPlayed ? (
+                          // Show thinking animation until Auto TTS audio starts playing
+                          <TypingAnimation className="text-base" />
                         ) : message.content.includes("<BLOCKS_DATA>") ? (
                           <FastBlockRenderer
                             content={message.content}
