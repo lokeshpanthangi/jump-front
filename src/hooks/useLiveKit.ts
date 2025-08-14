@@ -55,6 +55,9 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
     callbacksRef.current?.onError?.(error);
   }, [updateState]);
 
+  const retryCountRef = useRef(0);
+  const maxRetries = 3;
+
   const connectToRoom = useCallback(async () => {
     const apiKey = import.meta.env.VITE_LIVEKIT_API_KEY;
     const apiSecret = import.meta.env.VITE_LIVEKIT_API_SECRET;
@@ -69,7 +72,7 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
     const room = new Room();
     roomRef.current = room;
 
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<void>(async (resolve, reject) => {
       // Set up room event listeners
       room.on(RoomEvent.Connected, () => {
         updateState({ isConnected: true });
@@ -114,19 +117,29 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
       });
 
       // Create a proper LiveKit token
-      createLiveKitToken(apiKey, apiSecret, `user_${Date.now()}`, 'voice-assistant-room')
-        .then(token => {
-          // Connect to room
-          return room.connect(wsUrl, token);
-        })
-        .catch(reject);
+      try {
+        const token = await createLiveKitToken(apiKey, apiSecret, `user_${Date.now()}`, 'voice-assistant-room');
+        await room.connect(wsUrl, token);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown connection error';
+        updateError(`Connection failed: ${errorMessage}`);
+        if (retryCountRef.current < maxRetries) {
+          retryCountRef.current++;
+          updateStatus(`Retrying connection (${retryCountRef.current}/${maxRetries})...`);
+          setTimeout(() => connectToRoom().catch(reject), 2000); // Retry after 2 seconds
+        } else {
+          reject(error);
+        }
+      }
     });
-  }, [updateState, updateStatus]);
+  }, [updateState, updateStatus, updateError, maxRetries]);
 
   const startStreaming = useCallback(async () => {
     if (state.isStreaming) {
       return;
     }
+
+    retryCountRef.current = 0; // Reset retry count
 
     try {
       updateStatus('Starting live connection...');
@@ -137,21 +150,27 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
       }
 
       // Create local audio track for microphone input
-      const audioTrack = await createLocalAudioTrack({
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      });
-      
-      localAudioTrackRef.current = audioTrack;
-
-      // Publish the audio track
-      if (roomRef.current) {
-        await roomRef.current.localParticipant.publishTrack(audioTrack, {
-          name: 'microphone'
+      // Add try-catch for audio track creation and publishing
+      try {
+        const audioTrack = await createLocalAudioTrack({
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
         });
-      }
+        localAudioTrackRef.current = audioTrack;
 
+        await roomRef.current.localParticipant.publishTrack(audioTrack, { name: 'microphone' });
+      } catch (trackError) {
+        const errorMessage = trackError instanceof Error ? trackError.message : 'Unknown track error';
+        updateError(`Failed to publish audio track: ${errorMessage}`);
+        if (retryCountRef.current < maxRetries) {
+          retryCountRef.current++;
+          updateStatus(`Retrying audio setup (${retryCountRef.current}/${maxRetries})...`);
+          return startStreaming(); // Retry
+        } else {
+          throw trackError;
+        }
+      }
       updateState({ isStreaming: true });
       updateStatus('🎤 Live - Speak anytime');
       
@@ -220,6 +239,26 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
       }
     };
   }, []);
+
+  // Add reconnection logic on disconnect
+  useEffect(() => {
+    if (roomRef.current) {
+      const room = roomRef.current;
+      const handleDisconnect = () => {
+        if (state.isStreaming && retryCountRef.current < maxRetries) {
+          retryCountRef.current++;
+          updateStatus(`Reconnecting (${retryCountRef.current}/${maxRetries})...`);
+          startStreaming();
+        }
+      };
+      
+      room.on(RoomEvent.Disconnected, handleDisconnect);
+      
+      return () => {
+        room.off(RoomEvent.Disconnected, handleDisconnect);
+      };
+    }
+  }, [state.isStreaming, startStreaming, updateStatus, maxRetries]);
 
   return {
     state,

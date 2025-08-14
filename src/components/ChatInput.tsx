@@ -3,6 +3,7 @@ import { Waves, Paperclip, Pin, Search, Globe, Mic, X, MicOff } from 'lucide-rea
 import { useChatContext, type ChatMode } from '../contexts/ChatContext';
 import { useLiveKit } from '../hooks/useLiveKit';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
+import { LiveChatModal } from './ui/LiveChatModal';
 
 interface ChatInputProps {
   centered?: boolean;
@@ -21,6 +22,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({ centered = 
   const [showModeDropdown, setShowModeDropdown] = useState(false);
   const [showNotification, setShowNotification] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
+  const [showLiveChatModal, setShowLiveChatModal] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -143,13 +145,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({ centered = 
   };
 
   const handleWavesClick = () => {
-    if (!state.isLiveMode) {
-      // Start live mode with direct streaming connection
-      liveKit.startStreaming();
-      toggleLiveMode();
-      toggleAurora();
-    }
-    // If already in live mode, do nothing - only exit button can stop it
+    // Open the live chat modal instead of inline mode
+    setShowLiveChatModal(true);
   };
 
   const handleExitLiveMode = () => {
@@ -420,6 +417,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({ centered = 
           <span className="text-sm">Listening...</span>
         </div>
       )}
+
+      {/* Live Chat Modal */}
+      <LiveChatModal 
+        isOpen={showLiveChatModal} 
+        onClose={() => setShowLiveChatModal(false)} 
+      />
     </div>
   );
 });
