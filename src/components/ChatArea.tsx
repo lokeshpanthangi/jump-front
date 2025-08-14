@@ -304,7 +304,7 @@ const formatMessageTime = (date: Date | string): string => {
 };
 
 export const ChatArea: React.FC = () => {
-  const { state, addAIMessage, sendMessage } = useChatContext();
+  const { state, addAIMessage, sendMessage, markMessageAutoTTSPlayed, dispatch } = useChatContext();
   const [showCenteredInput, setShowCenteredInput] = useState(true);
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
@@ -351,6 +351,20 @@ export const ChatArea: React.FC = () => {
     start: number;
     end: number;
   }> | null>(null);
+  
+  // Synchronized TTS state
+  const [synchronizedTTSData, setSynchronizedTTSData] = useState<{
+    messageId: string;
+    fullText: string;
+    wordTimestamps: Array<{ word: string; start: number; end: number }>;
+    audioElement: HTMLAudioElement;
+    isPlaying: boolean;
+  } | null>(null);
+  const [revealedText, setRevealedText] = useState<string>("");
+  const [currentRevealIndex, setCurrentRevealIndex] = useState<number>(-1);
+  
+  // Auto TTS generation state - track which messages are generating audio
+  const [generatingAutoTTS, setGeneratingAutoTTS] = useState<Set<string>>(new Set());
 
   const hasMessages = state.currentChat?.messages.length ?? 0 > 0;
 
@@ -429,6 +443,7 @@ export const ChatArea: React.FC = () => {
       setTtsAudioCache(new Map());
       setIsLoadingTTS(new Map());
       setPlayingVoice(null);
+      setGeneratingAutoTTS(new Set());
     };
   }, [state.currentChatId]); // Clear when chat changes
 
@@ -440,6 +455,7 @@ export const ChatArea: React.FC = () => {
         audio.src = "";
       });
       speechSynthesis.cancel();
+      setGeneratingAutoTTS(new Set());
     };
   }, []);
 
@@ -448,33 +464,80 @@ export const ChatArea: React.FC = () => {
     lastProcessedMessageRef.current = null;
   }, [state.currentChatId]);
 
-  // Auto TTS for non-research messages
+  // Handle synchronized word revelation based on audio timestamps
   useEffect(() => {
-    if (!state.autoTTS || !state.currentChat?.messages.length) return;
+    if (!synchronizedTTSData || !synchronizedTTSData.isPlaying) {
+      return;
+    }
 
-    // Get the latest AI message
-    const messages = state.currentChat.messages;
-    const latestMessage = messages[messages.length - 1];
+    const { audioElement, wordTimestamps, fullText } = synchronizedTTSData;
+    
+    const updateRevealedText = () => {
+      const currentTime = audioElement.currentTime;
+      
+      // Find which words should be revealed based on current time
+      let revealUpToIndex = -1;
+      for (let i = 0; i < wordTimestamps.length; i++) {
+        if (currentTime >= wordTimestamps[i].start) {
+          revealUpToIndex = i;
+        } else {
+          break;
+        }
+      }
+      
+      if (revealUpToIndex !== currentRevealIndex) {
+        setCurrentRevealIndex(revealUpToIndex);
+        
+        // Build revealed text up to current index
+        if (revealUpToIndex >= 0) {
+          const revealedWords = wordTimestamps.slice(0, revealUpToIndex + 1).map(t => t.word);
+          setRevealedText(revealedWords.join(' '));
+        } else {
+          setRevealedText('');
+        }
+      }
+    };
 
-    // Check if it's an AI message, not in research mode, not streaming, and not already processed
+    const handleTimeUpdate = () => {
+      updateRevealedText();
+    };
+
+    const handleEnded = () => {
+      // Reveal full text when audio ends
+      setRevealedText(fullText);
+      setCurrentRevealIndex(wordTimestamps.length - 1);
+    };
+
+    audioElement.addEventListener('timeupdate', handleTimeUpdate);
+    audioElement.addEventListener('ended', handleEnded);
+
+    return () => {
+      audioElement.removeEventListener('timeupdate', handleTimeUpdate);
+      audioElement.removeEventListener('ended', handleEnded);
+    };
+  }, [synchronizedTTSData, currentRevealIndex]);
+
+  // Auto TTS for pending responses with synchronized word display
+  useEffect(() => {
+    if (!state.autoTTS || !state.pendingAutoTTSResponse) return;
+
+    const { chatId, content, messageId } = state.pendingAutoTTSResponse;
+    
+    // Only process if it's for the current chat and not already processed
     if (
-      latestMessage &&
-      latestMessage.type === "ai" &&
-      latestMessage.mode !== "research" &&
-      !latestMessage.isStreaming &&
-      !latestMessage.isCurrentlyGenerating &&
-      latestMessage.id !== lastProcessedMessageRef.current
+      chatId === state.currentChatId &&
+      messageId !== lastProcessedMessageRef.current
     ) {
       // Mark as processed
-      lastProcessedMessageRef.current = latestMessage.id;
+      lastProcessedMessageRef.current = messageId;
 
-      // Trigger TTS automatically
-      handleElevenLabsTTS(latestMessage.content, latestMessage.id);
+      // Trigger synchronized TTS with word-by-word display
+      handleSynchronizedTTS(content, messageId);
     }
   }, [
     state.autoTTS,
-    state.currentChat?.messages,
-    state.currentChat?.messages?.length,
+    state.pendingAutoTTSResponse,
+    state.currentChatId,
   ]);
 
   const handleMessageSent = () => {
@@ -632,6 +695,158 @@ export const ChatArea: React.FC = () => {
     }
 
     return wordTimestamps;
+  };
+
+  const handleSynchronizedTTS = async (content: string, messageId: string) => {
+    const apiKey = import.meta.env.VITE_ELEVENLABS_API_KEY;
+
+    try {
+      setPlayingVoice(messageId);
+      // Mark this message as generating auto TTS
+      setGeneratingAutoTTS(prev => new Set(prev).add(messageId));
+      
+      // Call ElevenLabs API with character timestamps
+      const ttsResponse = await fetch(
+        "https://api.elevenlabs.io/v1/text-to-speech/zT03pEAEi0VHKciJODfn/with-timestamps",
+        {
+          method: "POST",
+          headers: {
+            "xi-api-key": apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            text: content,
+            model_id: "eleven_multilingual_v2",
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.75,
+              style: 0.0,
+              use_speaker_boost: true,
+              speed: 0.75,
+            },
+          }),
+        }
+      );
+
+      if (!ttsResponse.ok) {
+        throw new Error(`ElevenLabs API error: ${ttsResponse.status}`);
+      }
+
+      const result = await ttsResponse.json();
+
+      // Convert base64 audio to blob
+      const audioData = atob(result.audio_base64);
+      const audioArray = new Uint8Array(audioData.length);
+      for (let i = 0; i < audioData.length; i++) {
+        audioArray[i] = audioData.charCodeAt(i);
+      }
+      const audioBlob = new Blob([audioArray], { type: "audio/mpeg" });
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      // Process character-level timestamps into word-level
+      const processedTimestamps = processCharacterTimestamps(
+        result.alignment,
+        content
+      );
+
+      // Create audio element
+      const audio = new Audio(audioUrl);
+      
+      // Now that TTS is ready, add the message to the chat
+      const apiMessage = {
+        id: messageId,
+        content: content,
+        type: "ai" as const,
+        timestamp: new Date(),
+        isStreaming: false,
+        isCurrentlyGenerating: false,
+        page: state.currentPage,
+        hasAutoTTSPlayed: true, // Mark as played since we're about to play it
+        isAutoTTSMessage: true, // Mark as Auto TTS message
+      };
+      
+      // Add the message to the chat
+      if (state.currentChatId) {
+        dispatch({ type: "ADD_MESSAGE", chatId: state.currentChatId, message: apiMessage });
+      }
+      
+      // Clear the pending response
+      dispatch({ type: "HANDLE_AUTO_TTS_RESPONSE", chatId: "", content: "", messageId: "" });
+
+      // Setup synchronized TTS data
+      setSynchronizedTTSData({
+        messageId,
+        fullText: content,
+        wordTimestamps: processedTimestamps,
+        audioElement: audio,
+        isPlaying: true,
+      });
+      
+      setRevealedText("");
+      setCurrentRevealIndex(-1);
+      setCurrentAudioElement(audio);
+      setCurrentPlayingMessageId(messageId);
+
+      // Setup audio event handlers
+      audio.onended = () => {
+        setPlayingVoice(null);
+        setSynchronizedTTSData(null);
+        setRevealedText("");
+        setCurrentRevealIndex(-1);
+        setCurrentAudioElement(null);
+        setCurrentPlayingMessageId(null);
+        // Clear generating state
+        setGeneratingAutoTTS(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(messageId);
+          return newSet;
+        });
+        URL.revokeObjectURL(audioUrl);
+      };
+
+      audio.onerror = () => {
+        console.error("Audio playback error");
+        setPlayingVoice(null);
+        setSynchronizedTTSData(null);
+        setRevealedText("");
+        setCurrentRevealIndex(-1);
+        setCurrentAudioElement(null);
+        setCurrentPlayingMessageId(null);
+        // Clear generating state
+        setGeneratingAutoTTS(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(messageId);
+          return newSet;
+        });
+        URL.revokeObjectURL(audioUrl);
+      };
+
+      // When audio starts playing, clear generating state and start synchronized display
+      audio.onplay = () => {
+        setGeneratingAutoTTS(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(messageId);
+          return newSet;
+        });
+      };
+
+      // Start audio playback
+      audio.play();
+    } catch (error) {
+      console.error("Synchronized TTS error:", error);
+      setPlayingVoice(null);
+      setSynchronizedTTSData(null);
+      setRevealedText("");
+      setCurrentRevealIndex(-1);
+      setCurrentAudioElement(null);
+      setCurrentPlayingMessageId(null);
+      // Clear generating state on error
+      setGeneratingAutoTTS(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(messageId);
+        return newSet;
+      });
+    }
   };
 
   const handleElevenLabsTTS = async (content: string, messageId: string) => {
@@ -936,7 +1151,7 @@ export const ChatArea: React.FC = () => {
         user_id: state.currentUser.username,
         num_questions: numQuestions,
         difficulty: difficulty,
-        chat_id: state?.currentChat?.backendChatId?.chat_id,
+        chat_id: state?.currentChat?.backendChatId,
       };
 
       console.log("Sending quiz request:", requestBody);
@@ -1197,9 +1412,23 @@ export const ChatArea: React.FC = () => {
                               }
                             </StreamingMessage>
                           )
+                        ) : state.autoTTS && generatingAutoTTS.has(message.id) ? (
+                          // Show thinking animation when auto TTS is generating audio
+                          <TypingAnimation className="text-base" />
+                        ) : message.isAutoTTSMessage && !message.hasAutoTTSPlayed && !synchronizedTTSData ? (
+                          // Hide AI response initially when Auto TTS is enabled and not yet played
+                          <div className="text-text-muted italic">Preparing audio response...</div>
                         ) : message.content.includes("<BLOCKS_DATA>") ? (
                           <FastBlockRenderer
                             content={message.content}
+                            playgroundMode={playgroundMode}
+                            onVideoSelectForPlayground={
+                              handleVideoSelectForPlayground
+                            }
+                          />
+                        ) : synchronizedTTSData && synchronizedTTSData.messageId === message.id ? (
+                          <MarkdownRenderer
+                            content={revealedText || ""}
                             playgroundMode={playgroundMode}
                             onVideoSelectForPlayground={
                               handleVideoSelectForPlayground
@@ -1511,7 +1740,7 @@ export const ChatArea: React.FC = () => {
       <ResearchTTSModal
         isOpen={isResearchTTSModalOpen}
         onClose={() => setIsResearchTTSModalOpen(false)}
-        chatId={state?.currentChat?.backendChatId?.chat_id ?? researchTTSChatId}
+        chatId={state?.currentChat?.backendChatId ?? researchTTSChatId}
         messageId={researchTTSMessageId}
       />
     </div>

@@ -10,6 +10,8 @@ export type Message = {
   isCurrentlyGenerating?: boolean;
   page?: number;
   chat_id?: string;
+  hasAutoTTSPlayed?: boolean;
+  isAutoTTSMessage?: boolean; // Track if message was processed through Auto TTS
 };
 
 export type Chat = {
@@ -49,6 +51,11 @@ type ChatState = {
   currentPage: number;
   hasInitializedUser: boolean; // Track if user has been initialized
   autoTTS: boolean;
+  pendingAutoTTSResponse?: {
+    chatId: string;
+    content: string;
+    messageId: string;
+  };
 };
 
 type ChatAction =
@@ -88,7 +95,9 @@ type ChatAction =
   | { type: "SET_LOADING_STATE"; loadingState: string | null }
   | { type: "SET_CURRENT_PAGE"; page: number }
   | { type: "LOAD_HISTORY"; chats: Chat[] }
-  | { type: "TOGGLE_AUTO_TTS" };
+  | { type: "TOGGLE_AUTO_TTS" }
+  | { type: "MARK_MESSAGE_AUTO_TTS_PLAYED"; chatId: string; messageId: string }
+  | { type: "HANDLE_AUTO_TTS_RESPONSE"; chatId: string; content: string; messageId: string };
 
 const initialState: ChatState = {
   chats: [],
@@ -377,6 +386,52 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "TOGGLE_AUTO_TTS":
       return { ...state, autoTTS: !state.autoTTS };
 
+    case "MARK_MESSAGE_AUTO_TTS_PLAYED": {
+      const updatedChats = state.chats.map((chat) => {
+        if (chat.id === action.chatId) {
+          const updatedMessages = chat.messages.map((message) => {
+            if (message.id === action.messageId) {
+              return {
+                ...message,
+                hasAutoTTSPlayed: true,
+              };
+            }
+            return message;
+          });
+
+          return {
+            ...chat,
+            messages: updatedMessages,
+          };
+        }
+        return chat;
+      });
+
+      const currentChat =
+        state.currentChatId === action.chatId
+          ? updatedChats.find((c) => c.id === action.chatId) || null
+          : state.currentChat;
+
+      return {
+        ...state,
+        chats: updatedChats,
+        currentChat,
+      };
+    }
+
+    case "HANDLE_AUTO_TTS_RESPONSE": {
+      // This action is used to store the AI response content for Auto TTS processing
+      // without displaying it in the chat area initially
+      return {
+        ...state,
+        pendingAutoTTSResponse: {
+          chatId: action.chatId,
+          content: action.content,
+          messageId: action.messageId,
+        },
+      };
+    }
+
     default:
       return state;
   }
@@ -384,6 +439,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
 type ChatContextType = {
   state: ChatState;
+  dispatch: React.Dispatch<ChatAction>;
   createNewChat: () => string;
   selectChat: (chatId: string) => void;
   deleteChat: (chatId: string) => void;
@@ -410,6 +466,8 @@ type ChatContextType = {
   setCurrentPage: (page: number) => void;
   loadChatHistory: () => Promise<void>;
   toggleAutoTTS: () => void;
+  markMessageAutoTTSPlayed: (chatId: string, messageId: string) => void;
+  handleAutoTTSResponse: (chatId: string, content: string, messageId: string) => void;
 };
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -1037,16 +1095,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           ) {
             responseContent = queryData.lesson[0].script;
           }
-          const apiMessage: Message = {
-            id: aiMessageId,
-            content: responseContent,
-            type: "ai",
-            timestamp: new Date(),
-            isStreaming: true,
-            isCurrentlyGenerating: true,
-            page: state.currentPage,
-          };
-          dispatch({ type: "ADD_MESSAGE", chatId, message: apiMessage });
+          // Check if Auto TTS is enabled and this is not research mode
+          if (state.autoTTS && mode !== "research") {
+            // Handle Auto TTS response without displaying the message
+            handleAutoTTSResponse(chatId, responseContent, aiMessageId);
+          } else {
+            // Normal message display
+            const apiMessage: Message = {
+              id: aiMessageId,
+              content: responseContent,
+              type: "ai",
+              timestamp: new Date(),
+              isStreaming: true,
+              isCurrentlyGenerating: true,
+              page: state.currentPage,
+            };
+            dispatch({ type: "ADD_MESSAGE", chatId, message: apiMessage });
+          }
         } catch (error) {
           console.error("Query API Error:", error);
           const errorMessage: Message = {
@@ -1225,8 +1290,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: "SET_RESEARCH_MODE_USED", chatId });
   };
 
+  const markMessageAutoTTSPlayed = (chatId: string, messageId: string) => {
+    dispatch({ type: "MARK_MESSAGE_AUTO_TTS_PLAYED", chatId, messageId });
+  };
+
+  const handleAutoTTSResponse = (chatId: string, content: string, messageId: string) => {
+    dispatch({ type: "HANDLE_AUTO_TTS_RESPONSE", chatId, content, messageId });
+  };
+
   const value: ChatContextType = {
     state,
+    dispatch,
     createNewChat,
     selectChat,
     deleteChat,
@@ -1249,6 +1323,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setLoadingState,
     setCurrentPage,
     loadChatHistory,
+    markMessageAutoTTSPlayed,
+    handleAutoTTSResponse,
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
