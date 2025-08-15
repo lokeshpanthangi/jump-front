@@ -73,26 +73,51 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
     roomRef.current = room;
 
     return new Promise<void>(async (resolve, reject) => {
+      let connectionTimeout: NodeJS.Timeout;
+      let isResolved = false;
+
+      // Set connection timeout (15 seconds)
+      connectionTimeout = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          updateError('Connection timeout - please try again');
+          room.disconnect();
+          reject(new Error('Connection timeout'));
+        }
+      }, 15000);
+
       // Set up room event listeners
       room.on(RoomEvent.Connected, () => {
-        updateState({ isConnected: true });
-        updateStatus('✅ Connected to LiveKit');
-        console.log('Connected to LiveKit room');
-        resolve();
+        if (!isResolved) {
+          isResolved = true;
+          clearTimeout(connectionTimeout);
+          retryCountRef.current = 0; // Reset retry count on successful connection
+          updateState({ isConnected: true, error: '' });
+          updateStatus('✅ Connected to LiveKit');
+          console.log('Connected to LiveKit room');
+          resolve();
+        }
       });
 
-      room.on(RoomEvent.Disconnected, () => {
+      room.on(RoomEvent.Disconnected, (reason) => {
+        clearTimeout(connectionTimeout);
         updateState({ isConnected: false, isStreaming: false });
         updateStatus('Disconnected from LiveKit');
-        console.log('Disconnected from LiveKit room');
+        console.log('Disconnected from LiveKit room:', reason);
       });
 
       room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) => {
         if (track.kind === Track.Kind.Audio) {
           const audioTrack = track as AudioTrack;
           const audioElement = audioTrack.attach();
+          audioElement.style.display = 'none'; // Hide audio element
           document.body.appendChild(audioElement);
-          audioElement.play();
+          
+          // Add error handling for audio playback
+          audioElement.play().catch(error => {
+            console.warn('Audio playback failed:', error);
+            updateError('Audio playback failed - please check permissions');
+          });
           
           updateStatus('🎧 Receiving response...');
           
@@ -109,11 +134,25 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
         callbacksRef.current?.onMessage?.(message);
       });
 
-      // Handle connection errors
+      // Handle connection state changes
       room.on(RoomEvent.ConnectionStateChanged, (state) => {
-        if (state === 'disconnected') {
-          reject(new Error(`Connection failed: ${state}`));
+        console.log('Connection state changed:', state);
+        if (state === 'failed' || state === 'closed') {
+          if (!isResolved) {
+            isResolved = true;
+            clearTimeout(connectionTimeout);
+            reject(new Error(`Connection failed: ${state}`));
+          }
         }
+      });
+
+      // Handle reconnection events
+      room.on(RoomEvent.Reconnecting, () => {
+        updateStatus('Reconnecting to LiveKit...');
+      });
+
+      room.on(RoomEvent.Reconnected, () => {
+        updateStatus('✅ Reconnected to LiveKit');
       });
 
       // Create a proper LiveKit token
@@ -121,14 +160,21 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
         const token = await createLiveKitToken(apiKey, apiSecret, `user_${Date.now()}`, 'voice-assistant-room');
         await room.connect(wsUrl, token);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown connection error';
-        updateError(`Connection failed: ${errorMessage}`);
-        if (retryCountRef.current < maxRetries) {
-          retryCountRef.current++;
-          updateStatus(`Retrying connection (${retryCountRef.current}/${maxRetries})...`);
-          setTimeout(() => connectToRoom().catch(reject), 2000); // Retry after 2 seconds
-        } else {
-          reject(error);
+        clearTimeout(connectionTimeout);
+        if (!isResolved) {
+          isResolved = true;
+          const errorMessage = error instanceof Error ? error.message : 'Unknown connection error';
+          updateError(`Connection failed: ${errorMessage}`);
+          
+          if (retryCountRef.current < maxRetries) {
+            retryCountRef.current++;
+            updateStatus(`Retrying connection (${retryCountRef.current}/${maxRetries})...`);
+            setTimeout(() => {
+              connectToRoom().then(resolve).catch(reject);
+            }, 3000); // Increased retry delay to 3 seconds
+          } else {
+            reject(error);
+          }
         }
       }
     });
@@ -149,44 +195,80 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
         await connectToRoom();
       }
 
-      // Create local audio track for microphone input
-      // Add try-catch for audio track creation and publishing
+      // Check microphone permissions first
       try {
-        const audioTrack = await createLocalAudioTrack({
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop()); // Stop the test stream
+      } catch (permissionError) {
+        updateError('Microphone permission denied. Please allow microphone access and try again.');
+        return;
+      }
+
+      // Create local audio track for microphone input with enhanced settings
+      let audioTrack;
+      try {
+        updateStatus('Setting up microphone...');
+        audioTrack = await createLocalAudioTrack({
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          sampleRate: 48000,
+          channelCount: 1
         });
         localAudioTrackRef.current = audioTrack;
 
-        await roomRef.current.localParticipant.publishTrack(audioTrack, { name: 'microphone' });
+        if (!roomRef.current) {
+          throw new Error('Room not connected');
+        }
+
+        updateStatus('Publishing audio track...');
+        await roomRef.current.localParticipant.publishTrack(audioTrack, { 
+          name: 'microphone',
+          source: Track.Source.Microphone
+        });
+        
       } catch (trackError) {
         const errorMessage = trackError instanceof Error ? trackError.message : 'Unknown track error';
-        updateError(`Failed to publish audio track: ${errorMessage}`);
+        console.error('Audio track error:', trackError);
+        
+        // Clean up failed track
+        if (audioTrack) {
+          audioTrack.stop();
+        }
+        
+        if (trackError instanceof Error && trackError.message.includes('Permission')) {
+          updateError('Microphone access denied. Please check your browser permissions.');
+          return;
+        }
+        
+        updateError(`Failed to setup audio: ${errorMessage}`);
         if (retryCountRef.current < maxRetries) {
           retryCountRef.current++;
           updateStatus(`Retrying audio setup (${retryCountRef.current}/${maxRetries})...`);
-          return startStreaming(); // Retry
+          setTimeout(() => startStreaming(), 2000);
+          return;
         } else {
           throw trackError;
         }
       }
-      updateState({ isStreaming: true });
+      
+      updateState({ isStreaming: true, error: '' });
       updateStatus('🎤 Live - Speak anytime');
       
-      // Send initial greeting request to the agent
+      // Send initial greeting request to the agent with Hindi instruction
       setTimeout(() => {
         if (roomRef.current) {
-          const greetingMessage = 'Please greet the user and offer your assistance.';
+          const greetingMessage = 'Please greet the user in Hindi and offer your assistance. Say नमस्ते and introduce yourself.';
           const encoder = new TextEncoder();
           roomRef.current.localParticipant.publishData(encoder.encode(greetingMessage));
         }
-      }, 1000);
+      }, 1500); // Increased delay to ensure connection is stable
       
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       updateError(`Failed to start streaming: ${errorMessage}`);
       console.error('Streaming error:', error);
+      updateState({ isStreaming: false });
     }
   }, [state.isStreaming, state.isConnected, connectToRoom, updateState, updateStatus, updateError]);
 
@@ -240,15 +322,34 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
     };
   }, []);
 
-  // Add reconnection logic on disconnect
+  // Add reconnection logic on disconnect and connection health monitoring
   useEffect(() => {
     if (roomRef.current) {
       const room = roomRef.current;
-      const handleDisconnect = () => {
+      let reconnectTimeout: NodeJS.Timeout;
+      
+      const handleDisconnect = (reason?: any) => {
+        console.log('Room disconnected:', reason);
         if (state.isStreaming && retryCountRef.current < maxRetries) {
           retryCountRef.current++;
           updateStatus(`Reconnecting (${retryCountRef.current}/${maxRetries})...`);
-          startStreaming();
+          
+          // Clear any existing timeout
+          if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+          }
+          
+          // Attempt reconnection with exponential backoff
+          const delay = Math.min(2000 * Math.pow(2, retryCountRef.current - 1), 10000);
+          reconnectTimeout = setTimeout(() => {
+            startStreaming().catch(error => {
+              console.error('Reconnection failed:', error);
+              updateError(`Reconnection failed: ${error.message}`);
+            });
+          }, delay);
+        } else if (retryCountRef.current >= maxRetries) {
+          updateError('Maximum reconnection attempts reached. Please try again manually.');
+          updateState({ isStreaming: false });
         }
       };
       
@@ -256,9 +357,35 @@ export function useLiveKit(callbacks?: LiveKitCallbacks) {
       
       return () => {
         room.off(RoomEvent.Disconnected, handleDisconnect);
+        if (reconnectTimeout) {
+          clearTimeout(reconnectTimeout);
+        }
       };
     }
-  }, [state.isStreaming, startStreaming, updateStatus, maxRetries]);
+  }, [state.isStreaming, startStreaming, updateStatus, updateError, updateState, maxRetries]);
+
+  // Connection health check
+  useEffect(() => {
+    let healthCheckInterval: NodeJS.Timeout;
+    
+    if (state.isConnected && state.isStreaming) {
+      healthCheckInterval = setInterval(() => {
+        if (roomRef.current && roomRef.current.state === 'connected') {
+          // Connection is healthy
+          console.log('Connection health check: OK');
+        } else if (roomRef.current && roomRef.current.state === 'disconnected') {
+          console.warn('Connection health check: Disconnected');
+          updateStatus('Connection lost - attempting to reconnect...');
+        }
+      }, 10000); // Check every 10 seconds
+    }
+    
+    return () => {
+      if (healthCheckInterval) {
+        clearInterval(healthCheckInterval);
+      }
+    };
+  }, [state.isConnected, state.isStreaming, updateStatus]);
 
   return {
     state,

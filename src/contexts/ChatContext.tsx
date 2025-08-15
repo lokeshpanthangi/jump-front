@@ -114,7 +114,7 @@ const initialState: ChatState = {
   },
   isTyping: false,
   currentMode: null,
-  showAurora: false,
+  showAurora: true,
   isLiveMode: false,
   loadingState: null,
   currentPage: 1,
