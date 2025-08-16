@@ -6,7 +6,7 @@ import { HelmetProvider } from "react-helmet-async";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChatProvider } from "./contexts/ChatContext";
 import { Sidebar } from "./components/Sidebar";
-import { ThemeToggle } from "./components/ThemeToggle";
+
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import DeepLearning from "./pages/DeepLearning";
@@ -48,7 +48,7 @@ const AppLayout = () => {
     <div className="h-screen bg-background flex">
       {!isNotebookPage && !isPlaygroundPage && <Sidebar />}
       <AnimatedRoutes />
-      <ThemeToggle />
+
     </div>
   );
 };
