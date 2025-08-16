@@ -1289,10 +1289,10 @@ export const ChatArea: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col bg-chat-bg transition-all duration-500 ease-in-out h-screen relative">
-      {/* Aurora Effect - Always in background */}
+      {/* Aurora Effect - Only in dark mode */}
       <div
         className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${
-          state.showAurora ? "opacity-100" : "opacity-0 pointer-events-none"
+          state.showAurora && state.theme === 'dark' ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
         style={{ zIndex: 5 }}
       >

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Play, Eye, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
-import { YouTubeModal } from './YouTubeModal';
+import { YouTubeChatModal } from './YouTubeChatModal';
 
 interface YouTubeVideo {
   title: string;
@@ -138,8 +138,8 @@ export const YouTubeCards: React.FC<YouTubeCardsProps> = ({ videos, remainingVid
         )}
       </div>
       
-      {/* YouTube Modal */}
-      <YouTubeModal
+      {/* YouTube Chat Modal */}
+      <YouTubeChatModal
         isOpen={modalOpen}
         onClose={closeModal}
         videoUrl={selectedVideo?.link || ''}

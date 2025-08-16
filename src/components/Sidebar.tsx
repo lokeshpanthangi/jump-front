@@ -15,6 +15,8 @@ import {
   UserPlus,
   Users,
   Volume2,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { useChatContext } from "../contexts/ChatContext";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -85,6 +87,7 @@ export const Sidebar: React.FC = () => {
     createUser,
     setCurrentUser,
     toggleAutoTTS,
+    setTheme,
   } = useChatContext();
   const location = useLocation();
   const navigate = useNavigate();
@@ -480,6 +483,22 @@ export const Sidebar: React.FC = () => {
                         <Users className="w-4 h-4 text-text-secondary" />
                         <span className="text-sm text-text-primary">
                           Switch User
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setTheme(state.theme === 'light' ? 'dark' : 'light');
+                          setShowSettingsMenu(false);
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-button-secondary transition-colors duration-fast"
+                      >
+                        {state.theme === 'light' ? (
+                          <Moon className="w-4 h-4 text-text-secondary" />
+                        ) : (
+                          <Sun className="w-4 h-4 text-text-secondary" />
+                        )}
+                        <span className="text-sm text-text-primary">
+                          {state.theme === 'light' ? 'Dark Mode' : 'Light Mode'}
                         </span>
                       </button>
                     </div>
