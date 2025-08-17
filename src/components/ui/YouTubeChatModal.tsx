@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, MessageCircle, Video, Maximize2, Minimize2, Send, Mic, MicOff } from 'lucide-react';
+import { useLiveKit } from '../../hooks/useLiveKit';
 import { youtubeAnalysisService } from '../../services/youtubeAnalysis';
 
 interface YouTubeChatModalProps {
@@ -32,7 +33,17 @@ export const YouTubeChatModal: React.FC<YouTubeChatModalProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-
+  // LiveKit integration for voice chat
+  const {
+    isConnected,
+    isListening,
+    isSpeaking,
+    connect,
+    disconnect,
+    startListening,
+    stopListening,
+    conversationHistory
+  } = useLiveKit();
 
   // Helper function to extract YouTube video ID from URL
   const getYouTubeVideoId = (url: string): string | null => {
@@ -123,7 +134,17 @@ export const YouTubeChatModal: React.FC<YouTubeChatModalProps> = ({
     }
   };
 
-
+  const handleVoiceToggle = async () => {
+    if (!isConnected) {
+      await connect();
+    }
+    
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
+  };
 
 
 

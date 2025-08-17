@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Waves, Paperclip, Pin, Search, Globe, Mic, X, MicOff } from 'lucide-react';
 import { useChatContext, type ChatMode } from '../contexts/ChatContext';
+import { useLiveKit } from '../hooks/useLiveKit';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { LiveChatModal } from './ui/LiveChatModal';
 
@@ -86,7 +87,20 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({ centered = 
     }
   }, [hasUsedResearchMode, state.currentMode, setMode]);
 
-
+  // LiveKit integration
+  const liveKit = useLiveKit({
+    onMessage: async (message: string) => {
+      // Handle incoming messages and add them to chat
+      console.log('LiveKit message received:', message);
+      addAIMessage(message);
+    },
+    onStatusChange: (status: string) => {
+      console.log('LiveKit status:', status);
+    },
+    onError: (error: string) => {
+      console.error('LiveKit error:', error);
+    }
+  });
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -137,6 +151,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({ centered = 
 
   const handleExitLiveMode = () => {
     // Exit live mode completely and stop aurora
+    liveKit.stopStreaming();
+    liveKit.disconnect();
     toggleLiveMode();
     toggleAurora();
   };
