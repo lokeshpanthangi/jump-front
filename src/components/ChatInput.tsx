@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Waves, Paperclip, Pin, Search, Globe, Mic, X, MicOff } from 'lucide-react';
 import { useChatContext, type ChatMode } from '../contexts/ChatContext';
-import { useLiveKit } from '../hooks/useLiveKit';
-import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
+import { useLiveKit, useSpeechRecognition } from '../hooks';
 import { LiveChatModal } from './ui/LiveChatModal';
 
 interface ChatInputProps {
